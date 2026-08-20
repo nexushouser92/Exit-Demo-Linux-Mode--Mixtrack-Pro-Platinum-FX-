@@ -28,6 +28,7 @@ Bash
 > python3 exit_demo_linux.py
 
 ## The script will automatically detect your controller.
+<img width="686" height="196" alt="IMG2" src="https://github.com/user-attachments/assets/42119679-b622-4f22-aa6c-ba0f6a9954a3" />
 
 >It will send the necessary SysEx signals to turn off the LEDs demo mode.
 
