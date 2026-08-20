@@ -19,13 +19,13 @@ Your system needs Python tools to communicate with MIDI devices. Open your termi
 >Connect your Numark Mixtrack to the PC via USB cable before running the program.
 
 ## Step 3: Download or clone the script
->You can clone this repository or simply download the exit_demo_linux.py file and save it to your computer.
+>You can clone this repository or simply download the main.py file and save it to your computer.
 
 ## Step 4: Run the script
 >Open a terminal in the same folder where you saved the file and type the following command:
 
 Bash
-> python3 exit_demo_linux.py
+> python3 main.py
 
 ## The script will automatically detect your controller.
 <img width="686" height="196" alt="IMG2" src="https://github.com/user-attachments/assets/42119679-b622-4f22-aa6c-ba0f6a9954a3" />
