@@ -1,15 +1,21 @@
+"""Exit Demo Mode for the Numark Mixtrack Pro FX / Platinum FX (Linux): a small window that finds the controller
+and sends the SysEx commands that turn off its light demo mode.
+"""
 import locale
-import os
 import sys
+import time
+import tkinter as tk
+import tkinter.font as tkfont
 import webbrowser
-import mido
 
-# ==============================================================================
-# CONSOLE DISPLAY CONFIGURATION
-# ==============================================================================
-os.system('')
-print('\033[40m\033[92m', end='')
-os.system('clear')
+try:
+    import mido
+except ImportError:  # shown in the window with install instructions
+    mido = None
+
+REPO_URL = 'https://github.com/nexushouser92/Exit-Demo-Linux-Mode--Mixtrack-Pro-Platinum-FX-'
+POLL_MS = 1500  # how often the window looks for the controller
+FLUSH_DELAY = 0.1  # seconds to let ALSA deliver the SysEx messages before the port is closed
 
 # ==============================================================================
 # SYSTEM LANGUAGE DETECTION
@@ -19,96 +25,171 @@ try:
 except Exception:
     sys_lang = None
 
-IS_SPANISH = sys_lang and sys_lang.startswith('es')
+IS_SPANISH = bool(sys_lang and sys_lang.lower().startswith(('es', 'spanish')))
 
 # ==============================================================================
 # MULTILINGUAL MESSAGES DICTIONARY
 # ==============================================================================
 LANG = {
-    'banner': (
-        '    NUMARK MIXTRACK PLATINUM FX - EXIT DEMO MODE (LINUX)    '
-    ),
-    'not_found_err': (
-        'NO SE DETECTO EL CONTROLADOR.'
+    'title': 'Exit Demo Mode',
+    'heading': 'Exit Demo Mode',
+    'subheading': (
+        'Numark Mixtrack Pro FX / Platinum FX. Cierra tu software de DJ antes de continuar.'
         if IS_SPANISH
-        else 'CONTROLLER NOT DETECTED.'
+        else 'Numark Mixtrack Pro FX / Platinum FX. Close your DJ software before continuing.'
     ),
-    'connect_prompt': (
-        'POR FAVOR, CONECTE SU CONTROLADOR NUMARK MIXTRACK PRO / PLATINUM FX Y'
-        ' PRESIONE ENTER PARA REINTENTAR...'
+    'not_found': (
+        'No se detecta el controlador. Conecta tu Mixtrack por USB; se detectará automáticamente.'
         if IS_SPANISH
-        else (
-            'PLEASE CONNECT YOUR NUMARK MIXTRACK PRO / PLATINUM FX AND PRESS'
-            ' ENTER TO RETRY...'
-        )
+        else 'Controller not detected. Connect your Mixtrack via USB; it will be detected automatically.'
     ),
     'detected': (
-        'Controlador detectado:' if IS_SPANISH else 'Controller detected:'
+        'Controlador detectado: {name}' if IS_SPANISH else 'Controller detected: {name}'
+    ),
+    'button': 'Salir del modo demo' if IS_SPANISH else 'Exit demo mode',
+    'sending': 'Enviando comandos...' if IS_SPANISH else 'Sending commands...',
+    'success': (
+        'Listo: el modo demo está desactivado. Tu controlador está listo para usarse.'
+        ' Si lo desconectas, vuelve a ejecutar esta herramienta.'
+        if IS_SPANISH
+        else 'Done: demo mode is off and your controller is ready to use.'
+        ' If you unplug it, run this tool again.'
+    ),
+    'failed': (
+        'No se pudo salir del modo demo: {err}\nDesconecta y vuelve a conectar el controlador e inténtalo de nuevo.'
+        if IS_SPANISH
+        else 'Could not exit demo mode: {err}\nUnplug the controller, plug it back in and try again.'
     ),
     'port_open_err': (
-        'No se pudo abrir el puerto MIDI. Revisa si el software de DJ ya lo tiene abierto.'
+        'no se pudo abrir el puerto MIDI ({err}). Revisa si el software de DJ ya lo tiene abierto'
         if IS_SPANISH
-        else 'Could not open MIDI port. Check if DJ software is using it.'
+        else 'could not open the MIDI port ({err}). Check if DJ software is using it'
     ),
-    'success': (
-        'Controlador inicializado correctamente.'
-        if IS_SPANISH
-        else 'Controller successfully initialized.'
+    'midi_err': (
+        'Error del sistema MIDI: {err}' if IS_SPANISH else 'MIDI system error: {err}'
     ),
-    'exit_prompt': (
-        'Presione Enter para salir...'
+    'missing_deps': (
+        'Faltan las librerías MIDI de Python. Instálalas con:\n'
+        'sudo apt install python3-mido python3-rtmidi'
         if IS_SPANISH
-        else 'Press Enter to exit...'
+        else 'The Python MIDI libraries are missing. Install them with:\n'
+        'sudo apt install python3-mido python3-rtmidi'
+    ),
+    'footer': (
+        'Proyecto no oficial, sin relación con Numark ni inMusic.'
+        if IS_SPANISH
+        else 'Unofficial project, not affiliated with Numark or inMusic.'
     ),
 }
+
+# SysEx messages definition (mido adds the F0 ... F7 framing)
+# Universal Identity Request: the controller leaves its light demo mode when a host asks who it is.
+EXIT_DEMO_SYSEX = [0x7E, 0x00, 0x06, 0x01]
+STATUS_SYSEX = [0x00, 0x20, 0x7F, 0x03, 0x01]
+
 
 # ==============================================================================
 # MIDI DEVICE AUTOMATIC DETECTION (LINUX / ALSA)
 # ==============================================================================
 def get_numark_port():
-    outputs = mido.get_output_names()
-    for port_name in outputs:
-        lower_name = port_name.lower()
-        if 'mixtrack' in lower_name or 'numark' in lower_name or 'fx' in lower_name:
+    """Returns the name of the first MIDI output whose name contains "Mixtrack", or None."""
+    for port_name in mido.get_output_names():
+        if 'mixtrack' in port_name.lower():
             return port_name
     return None
 
+
+def exit_demo_mode(port_name):
+    """Opens the MIDI port, sends both SysEx messages and closes it. Returns None on success or an error message."""
+    try:
+        port = mido.open_output(port_name)
+    except Exception as e:
+        return LANG['port_open_err'].format(err=e)
+    try:
+        for data in (EXIT_DEMO_SYSEX, STATUS_SYSEX):
+            port.send(mido.Message('sysex', data=data))
+        time.sleep(FLUSH_DELAY)
+    except Exception as e:
+        return str(e)
+    finally:
+        port.close()
+    return None
+
+
 # ==============================================================================
-# MAIN PROGRAM EXECUTION
+# WINDOW
 # ==============================================================================
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.port = None
+        self.done = False  # keeps the last result on screen until the controller is unplugged
+        family = tkfont.nametofont('TkDefaultFont').actual()['family']
+        root.title(LANG['title'])
+        root.resizable(False, False)
+        frame = tk.Frame(root, padx=20, pady=16)
+        frame.pack()
+        tk.Label(frame, text=LANG['heading'], font=(family, 14, 'bold')).pack(anchor='w')
+        tk.Label(frame, text=LANG['subheading'], font=(family, 9), fg='#555',
+                 wraplength=440, justify='left').pack(anchor='w', pady=(2, 8))
+        self.status = tk.Label(frame, font=(family, 11), wraplength=440, justify='left')
+        self.status.pack(anchor='w', pady=(8, 14))
+        self.action = tk.Button(frame, text=LANG['button'], font=(family, 10, 'bold'), width=22,
+                                command=self.run)
+        self.action.pack(anchor='w')
+        footer = tk.Frame(frame)
+        footer.pack(fill='x', pady=(16, 0))
+        tk.Label(footer, text=LANG['footer'], font=(family, 8), fg='#777').pack(side='left')
+        link = tk.Label(footer, text='GitHub', font=(family, 8, 'underline'), fg='#0563c1', cursor='hand2')
+        link.pack(side='right')
+        link.bind('<Button-1>', lambda _: webbrowser.open(REPO_URL))
+        if mido is None:
+            self.show(LANG['missing_deps'], '#b00', False)
+        else:
+            self.poll()
 
-print('==================================================================')
-print(LANG['banner'])
-print('==================================================================\n')
+    def show(self, text, color, can_run):
+        self.status.config(text=text, fg=color)
+        self.action.config(state='normal' if can_run else 'disabled')
 
-# 1. Automatic controller detection loop
-port_name = get_numark_port()
+    def poll(self):
+        """Looks for the controller every POLL_MS, so plugging it in is enough."""
+        try:
+            port = get_numark_port()
+        except Exception as e:  # e.g. no MIDI backend or ALSA sequencer
+            self.port, self.done = None, False
+            self.show(LANG['midi_err'].format(err=e), '#b00', False)
+        else:
+            if port != self.port:
+                self.port, self.done = port, False
+            if not self.done:
+                if port is None:
+                    self.show(LANG['not_found'], '#b00', False)
+                else:
+                    self.show(LANG['detected'].format(name=port), '#000', True)
+        self.root.after(POLL_MS, self.poll)
 
-while port_name is None:
-    print(LANG['not_found_err'])
-    input(LANG['connect_prompt'])
-    print()
-    port_name = get_numark_port()
+    def run(self):
+        self.show(LANG['sending'], '#555', False)
+        self.root.config(cursor='watch')
+        self.root.update()
+        try:
+            error = exit_demo_mode(self.port)
+        finally:
+            self.root.config(cursor='')
+        self.done = True  # the next poll keeps this result on screen
+        if error:
+            self.show(LANG['failed'].format(err=error), '#b00', True)
+        else:
+            self.show(LANG['success'], '#070', True)
 
-print(f"{LANG['detected']} {port_name}")
 
-# 2. Open MIDI port and send SysEx commands
-try:
-    with mido.open_output(port_name) as port:
-        # SysEx messages definition
-        exit_demo_sysex = mido.Message('sysex', data=[0x7E, 0x00, 0x06, 0x01])
-        status_sysex = mido.Message('sysex', data=[0x00, 0x20, 0x7F, 0x03, 0x01])
+def main():
+    root = tk.Tk()
+    App(root)
+    root.mainloop()
+    return 0
 
-        # Send commands directly to hardware
-        port.send(exit_demo_sysex)
-        port.send(status_sysex)
-        
-    print(LANG['success'])
-except Exception as e:
-    print(f"{LANG['port_open_err']} ({e})")
 
-# 3. Exit prompt and repository redirection
-input(f"\n{LANG['exit_prompt']}")
-webbrowser.open(
-    'https://github.com/nexushouser92/Exit-Demo-Mode---Mixtrack-Pro-Platinum-FX'
-)
+if __name__ == '__main__':
+    sys.exit(main())
